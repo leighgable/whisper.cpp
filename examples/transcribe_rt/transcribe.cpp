@@ -2,6 +2,7 @@
 //
 // A very quick-n-dirty implementation serving mainly as a proof of concept.
 //
+#define MINIAUDIO_IMPLEMENTATION
 #include "../miniaudio.h"
 #include "common.h"
 #include "whisper.h"
@@ -14,6 +15,9 @@
 #include <vector>
 #include <fstream>
 #include <chrono>
+#include <iostream>
+#include <format>
+#include <optional>
 
 // command-line parameters
 struct whisper_params {
@@ -113,52 +117,65 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "\n");
 }
 
+struct my_app_state {
+    ma_device device;
+    std::optional<ma_encoder> aEncoder;
+};
+
+
+// 50Hz
 void data_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount) {
-    ma_encoder* pEncoder = (ma_encoder*)pDevice->pUserData;
-    ma_encoder_write_pcm_frames(pEncoder, pInput, frameCount, NULL);
+    auto& app = *(my_app_state*)pDevice->pUserData;
+
+    if(app.aEncoder)
+      ma_encoder_write_pcm_frames(&*app.aEncoder, pInput, frameCount, NULL);
 
     (void)pOutput; // Don't take output
+
+    fprintf(stderr, "frameCount: %d\n", (int)frameCount);
 }
 
-void audio_init_ma() {
+int audio_init_ma(my_app_state& app, whisper_params& params) {
     ma_result result;
     ma_device_config deviceConfig;
-    ma_device device;
 
     if (params.save_audio) {
+        app.aEncoder.emplace();
+
         ma_encoder_config aEncoderConfig;
-        ma_encoder aEncoder;
         aEncoderConfig = ma_encoder_config_init(ma_encoding_format_wav,
                                                 ma_format_f32,
                                                 1,
                                                 WHISPER_SAMPLE_RATE); // 16000?
         auto now = std::chrono::system_clock::now();
         auto UTC = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
-        if (ma_encoder_init_file(("audio_" + std::to_string(UTC) + ".wav"), &aEncoderConfig, &aEncoder) != MA_SUCCESS) {
-            fprintf(stderr, "Failed to create output audio file: audio_%s.wav\n", std::to_string(UTC));
-            return -1
+
+        if (ma_encoder_init_file(("audio_" + std::to_string(UTC) + ".wav").c_str(), &aEncoderConfig, &app.aEncoder.value()) != MA_SUCCESS) {
+            std::cerr << std::format("Failed to create output audio file: audio_{}.wav\n", UTC);
+            return -1;
         }
     }
+
     deviceConfig = ma_device_config_init(ma_device_type_capture);
     deviceConfig.capture.format = ma_format_f32; // todo replace with param
     deviceConfig.capture.channels = 1;
     deviceConfig.sampleRate = WHISPER_SAMPLE_RATE;
     deviceConfig.dataCallback = data_callback;
-    if (params.save_audio) {
-        deviceConfig.pUserData = &encoder;    
-    }
-    result = ma_device_init(NULL, &deviceConfig, &device);
-    if (result != MA_SUCESS) {
-        fprintf(stderr, "Failed to open audio capture device: %s\n", device.capture.name);
+    deviceConfig.pUserData = &app;
+
+    result = ma_device_init(NULL, &deviceConfig, &app.device);
+    if (result != MA_SUCCESS) {
+        fprintf(stderr, "Failed to open audio capture device: %s\n", app.device.capture.name);
         return -2;
     }
 
-    result = ma_device_start(&device);
+    result = ma_device_start(&app.device);
     if (result != MA_SUCCESS) {
-        ma_device_uninit(&device);
-        fprintf(stderr, "Failed to start audio capture device: %s\n", device.capture.name);
+        ma_device_uninit(&app.device);
+        fprintf(stderr, "Failed to start audio capture device: %s\n", app.device.capture.name);
         return -3;
     }
+    return 0;
 }
 
 int main(int argc, char ** argv) {
@@ -168,6 +185,14 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    auto app = new my_app_state ;
+    audio_init_ma(*app, params);
+
+    for(int i = 0; i < 5; i++)
+        sleep(1);
+    return 0;
+
+#if 0
     params.keep_ms   = std::min(params.keep_ms,   params.step_ms);
     params.length_ms = std::max(params.length_ms, params.step_ms);
 
@@ -466,6 +491,6 @@ int main(int argc, char ** argv) {
 
     whisper_print_timings(ctx);
     whisper_free(ctx);
-
+#endif
     return 0;
 }
