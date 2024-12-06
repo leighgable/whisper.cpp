@@ -2,17 +2,18 @@
 //
 // A very quick-n-dirty implementation serving mainly as a proof of concept.
 //
-#include "miniaudio.h"
+#include "../miniaudio.h"
 #include "common.h"
 #include "whisper.h"
 
+#include <bits/chrono.h>
 #include <cassert>
 #include <cstdio>
 #include <string>
 #include <thread>
 #include <vector>
 #include <fstream>
-
+#include <chrono>
 
 // command-line parameters
 struct whisper_params {
@@ -112,6 +113,54 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "\n");
 }
 
+void data_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount) {
+    ma_encoder* pEncoder = (ma_encoder*)pDevice->pUserData;
+    ma_encoder_write_pcm_frames(pEncoder, pInput, frameCount, NULL);
+
+    (void)pOutput; // Don't take output? 
+}
+
+void audio_init_ma() {
+    ma_result result;
+    ma_device_config deviceConfig;
+    ma_device device;
+
+    if (params.save_audio) {
+        ma_encoder_config aEncoderConfig;
+        ma_encoder aEncoder;
+        aEncoderConfig = ma_encoder_config_init(ma_encoding_format_wav,
+                                                ma_format_f32,
+                                                1,
+                                                WHISPER_SAMPLE_RATE); // 16000?
+        auto now = std::chrono::system_clock::now();
+        auto UTC = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
+        if (ma_encoder_init_file(("audio_" + std::to_string(UTC) + ".wav"), &aEncoderConfig, &aEncoder) != MA_SUCCESS) {
+            fprintf(stderr, "Failed to create output audio file: audio_%s.wav\n", std::to_string(UTC));
+            return -1
+        }
+    }
+    deviceConfig = ma_device_config_init(ma_device_type_capture);
+    deviceConfig.capture.format = ma_format_f32; // todo replace with param
+    deviceConfig.capture.channels = 1;
+    deviceConfig.sampleRate = WHISPER_SAMPLE_RATE;
+    deviceConfig.dataCallback = data_callback;
+    if (params.save_audio) {
+        deviceConfig.pUserData = &encoder;    
+    }
+    result = ma_device_init(NULL, &deviceConfig, &device);
+    if (result != MA_SUCESS) {
+        fprintf(stderr, "Failed to open audio capture device: %s\n", device.capture.name);
+        return -2;
+    }
+
+    result = ma_device_start(&device);
+    if (result != MA_SUCCESS) {
+        ma_device_uninit(&device);
+        fprintf(stderr, "Failed to start audio capture device: %s\n", device.capture.name);
+        return -3;
+    }
+}
+
 int main(int argc, char ** argv) {
     whisper_params params;
 
@@ -136,14 +185,14 @@ int main(int argc, char ** argv) {
     params.max_tokens     = 0;
 
     // init audio
+    
+    // audio_async audio(params.length_ms);
+    // if (!audio.init(params.capture_id, WHISPER_SAMPLE_RATE)) {
+    //     fprintf(stderr, "%s: audio.init() failed!\n", __func__);
+    //     return 1;
+    // }
 
-    audio_async audio(params.length_ms);
-    if (!audio.init(params.capture_id, WHISPER_SAMPLE_RATE)) {
-        fprintf(stderr, "%s: audio.init() failed!\n", __func__);
-        return 1;
-    }
-
-    audio.resume();
+    // audio.resume();
 
     // whisper init
     if (params.language != "auto" && whisper_lang_id(params.language.c_str()) == -1){
@@ -208,17 +257,19 @@ int main(int argc, char ** argv) {
         }
     }
 
-    wav_writer wavWriter;
-    // save wav file
-    if (params.save_audio) {
-        // Get current date/time for filename
-        time_t now = time(0);
-        char buffer[80];
-        strftime(buffer, sizeof(buffer), "%Y%m%d%H%M%S", localtime(&now));
-        std::string filename = std::string(buffer) + ".wav";
+    // wav_writer wavWriter;
+    // // save wav file
+    // if (params.save_audio) {
+    //     // Get current date/time for filename
+    //     time_t now = time(0);
+    //     char buffer[80];
+    //     strftime(buffer, sizeof(buffer), "%Y%m%d%H%M%S", localtime(&now));
+    //     std::string filename = std::string(buffer) + ".wav";
 
-        wavWriter.open(filename, WHISPER_SAMPLE_RATE, 16, 1);
-    }
+    //     wavWriter.open(filename, WHISPER_SAMPLE_RATE, 16, 1);
+    // }
+
+    
     printf("[Start speaking]\n");
     fflush(stdout);
 
@@ -227,11 +278,12 @@ int main(int argc, char ** argv) {
 
     // main audio loop
     while (is_running) {
-        if (params.save_audio) {
-            wavWriter.write(pcmf32_new.data(), pcmf32_new.size());
-        }
+        // if (params.save_audio) {
+        //     wavWriter.write(pcmf32_new.data(), pcmf32_new.size());
+        // }
         // handle Ctrl + C
-        is_running = sdl_poll_events();
+        // is_running = sdl_poll_events();
+
 
         if (!is_running) {
             break;
@@ -279,7 +331,6 @@ int main(int argc, char ** argv) {
 
             if (t_diff < 2000) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
                 continue;
             }
 
@@ -411,7 +462,7 @@ int main(int argc, char ** argv) {
         }
     }
 
-    audio.pause();
+    // audio.pause();
 
     whisper_print_timings(ctx);
     whisper_free(ctx);

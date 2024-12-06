@@ -50,17 +50,17 @@ target_link_libraries(${TARGET} PRIVATE whisper ${COMMON_EXTRA_LIBS})
 set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
 set_target_properties(${TARGET} PROPERTIES FOLDER "libs")
 
-set(TARGET common-ma)
+# set(TARGET common-ma)
 
-add_library(${TARGET} STATIC
-    common-ma.h
-    common-ma.cpp
-    )
+# add_library(${TARGET} STATIC
+#     common-ma.h
+#     common-ma.cpp
+#     )
 
-include(DefaultTargetOptions)
+# include(DefaultTargetOptions)
 
-set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
-set_target_properties(${TARGET} PROPERTIES FOLDER "libs")
+# set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+# set_target_properties(${TARGET} PROPERTIES FOLDER "libs")
 # endif()
 
 # add json lib

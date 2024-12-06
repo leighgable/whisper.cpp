@@ -32,6 +32,7 @@ ggml-metal-embed.metal.tmp
 /quantize
 /server
 /lsp
+test.wav
 
 arm_neon.h
 sync.sh
