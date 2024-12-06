@@ -117,7 +117,7 @@ void data_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uin
     ma_encoder* pEncoder = (ma_encoder*)pDevice->pUserData;
     ma_encoder_write_pcm_frames(pEncoder, pInput, frameCount, NULL);
 
-    (void)pOutput; // Don't take output? 
+    (void)pOutput; // Don't take output
 }
 
 void audio_init_ma() {
