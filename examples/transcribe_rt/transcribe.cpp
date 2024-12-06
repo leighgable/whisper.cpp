@@ -2,6 +2,7 @@
 //
 // A very quick-n-dirty implementation serving mainly as a proof of concept.
 //
+#define MINIAUDIO_IMPLEMENTATION
 #include "../miniaudio.h"
 #include "common.h"
 #include "whisper.h"
@@ -14,6 +15,10 @@
 #include <vector>
 #include <fstream>
 #include <chrono>
+#include <iostream>
+#include <format>
+#include <optional>
+#include <readerwriterqueue.h>
 
 // command-line parameters
 struct whisper_params {
@@ -113,52 +118,69 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "\n");
 }
 
+#include <readerwritercircularbuffer.h>
+struct my_app_state {
+    ma_device device;
+    std::optional<ma_encoder> aEncoder;
+    moodycamel::BlockingReaderWriterCircularBuffer<float> ringbuffer = moodycamel::BlockingReaderWriterCircularBuffer<float>(8192);
+};
+
+
+// 50Hz
 void data_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount) {
-    ma_encoder* pEncoder = (ma_encoder*)pDevice->pUserData;
-    ma_encoder_write_pcm_frames(pEncoder, pInput, frameCount, NULL);
+    auto& app = *(my_app_state*)pDevice->pUserData;
+
+    if(app.aEncoder)
+        ma_encoder_write_pcm_frames(&*app.aEncoder, pInput, frameCount, NULL);
 
     (void)pOutput; // Don't take output
+
+    auto frames = static_cast<const float*>(pInput);
+    for(int i = 0; i < frameCount; i++)
+        app.ringbuffer.try_enqueue(frames[i]);
 }
 
-void audio_init_ma() {
+int audio_init_ma(my_app_state& app, whisper_params& params) {
     ma_result result;
     ma_device_config deviceConfig;
-    ma_device device;
 
     if (params.save_audio) {
+        app.aEncoder.emplace();
+
         ma_encoder_config aEncoderConfig;
-        ma_encoder aEncoder;
         aEncoderConfig = ma_encoder_config_init(ma_encoding_format_wav,
                                                 ma_format_f32,
                                                 1,
                                                 WHISPER_SAMPLE_RATE); // 16000?
         auto now = std::chrono::system_clock::now();
         auto UTC = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
-        if (ma_encoder_init_file(("audio_" + std::to_string(UTC) + ".wav"), &aEncoderConfig, &aEncoder) != MA_SUCCESS) {
-            fprintf(stderr, "Failed to create output audio file: audio_%s.wav\n", std::to_string(UTC));
-            return -1
+
+        if (ma_encoder_init_file(("audio_" + std::to_string(UTC) + ".wav").c_str(), &aEncoderConfig, &app.aEncoder.value()) != MA_SUCCESS) {
+            std::cerr << std::format("Failed to create output audio file: audio_{}.wav\n", UTC);
+            return -1;
         }
     }
+
     deviceConfig = ma_device_config_init(ma_device_type_capture);
     deviceConfig.capture.format = ma_format_f32; // todo replace with param
     deviceConfig.capture.channels = 1;
     deviceConfig.sampleRate = WHISPER_SAMPLE_RATE;
     deviceConfig.dataCallback = data_callback;
-    if (params.save_audio) {
-        deviceConfig.pUserData = &encoder;    
-    }
-    result = ma_device_init(NULL, &deviceConfig, &device);
-    if (result != MA_SUCESS) {
-        fprintf(stderr, "Failed to open audio capture device: %s\n", device.capture.name);
+    deviceConfig.pUserData = &app;
+
+    result = ma_device_init(NULL, &deviceConfig, &app.device);
+    if (result != MA_SUCCESS) {
+        fprintf(stderr, "Failed to open audio capture device: %s\n", app.device.capture.name);
         return -2;
     }
 
-    result = ma_device_start(&device);
+    result = ma_device_start(&app.device);
     if (result != MA_SUCCESS) {
-        ma_device_uninit(&device);
-        fprintf(stderr, "Failed to start audio capture device: %s\n", device.capture.name);
+        ma_device_uninit(&app.device);
+        fprintf(stderr, "Failed to start audio capture device: %s\n", app.device.capture.name);
         return -3;
     }
+    return 0;
 }
 
 int main(int argc, char ** argv) {
@@ -167,6 +189,11 @@ int main(int argc, char ** argv) {
     if (whisper_params_parse(argc, argv, params) == false) {
         return 1;
     }
+
+    params.model = "/home/jcelerier/projets/formations/leigh-gable-2024-11/whisper.cpp/models/ggml-tiny.en.bin";
+
+    my_app_state app;
+    audio_init_ma(app, params);
 
     params.keep_ms   = std::min(params.keep_ms,   params.step_ms);
     params.length_ms = std::max(params.length_ms, params.step_ms);
@@ -292,23 +319,15 @@ int main(int argc, char ** argv) {
         // process new audio
 
         if (!use_vad) {
-            while (true) {
-                audio.get(params.step_ms, pcmf32_new);
+            pcmf32_new.clear();
+            pcmf32_new.resize(n_samples_30s, 0.0f);
+            const auto expected_frames = n_samples_30s; // 3 secondes
 
-                if ((int) pcmf32_new.size() > 2*n_samples_step) {
-                    fprintf(stderr, "\n\n%s: WARNING: cannot process audio fast enough, dropping audio ...\n\n", __func__);
-                    audio.clear();
-                    continue;
-                }
-
-                if ((int) pcmf32_new.size() >= n_samples_step) {
-                    audio.clear();
-                    break;
-                }
-
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            for(int num_frames = 0; num_frames < expected_frames; num_frames++) {
+                float v;
+                app.ringbuffer.wait_dequeue(v);
+                pcmf32_new[num_frames] = v;
             }
-
             const int n_samples_new = pcmf32_new.size();
 
             // take up to params.length_ms audio from previous iteration
@@ -326,25 +345,25 @@ int main(int argc, char ** argv) {
 
             pcmf32_old = pcmf32;
         } else {
-            const auto t_now  = std::chrono::high_resolution_clock::now();
-            const auto t_diff = std::chrono::duration_cast<std::chrono::milliseconds>(t_now - t_last).count();
+            // const auto t_now  = std::chrono::high_resolution_clock::now();
+            // const auto t_diff = std::chrono::duration_cast<std::chrono::milliseconds>(t_now - t_last).count();
 
-            if (t_diff < 2000) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                continue;
-            }
+            // if (t_diff < 2000) {
+            //     std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            //     continue;
+            // }
 
-            audio.get(2000, pcmf32_new);
+            // audio.get(2000, pcmf32_new);
 
-            if (::vad_simple(pcmf32_new, WHISPER_SAMPLE_RATE, 1000, params.vad_thold, params.freq_thold, false)) {
-                audio.get(params.length_ms, pcmf32);
-            } else {
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            // if (::vad_simple(pcmf32_new, WHISPER_SAMPLE_RATE, 1000, params.vad_thold, params.freq_thold, false)) {
+            //     audio.get(params.length_ms, pcmf32);
+            // } else {
+            //     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-                continue;
-            }
+            //     continue;
+            // }
 
-            t_last = t_now;
+            // t_last = t_now;
         }
 
         // run the inference
