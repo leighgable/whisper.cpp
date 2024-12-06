@@ -190,23 +190,11 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    params.model = "/home/jcelerier/projets/formations/leigh-gable-2024-11/whisper.cpp/models/ggml-tiny.en.bin";
+
     my_app_state app;
     audio_init_ma(app, params);
 
-    for(;;)
-    {
-        std::vector<float> buffer_pour_whisper;
-        const auto expected_frames = WHISPER_SAMPLE_RATE * 2.; // 2 secondes
-        while(buffer_pour_whisper.size() < expected_frames) {
-          float v;
-          app.ringbuffer.wait_dequeue(v);
-          buffer_pour_whisper.push_back(v);
-        }
-
-    }
-    return 0;
-
-#if 0
     params.keep_ms   = std::min(params.keep_ms,   params.step_ms);
     params.length_ms = std::max(params.length_ms, params.step_ms);
 
@@ -331,23 +319,15 @@ int main(int argc, char ** argv) {
         // process new audio
 
         if (!use_vad) {
-            while (true) {
-                audio.get(params.step_ms, pcmf32_new);
+            pcmf32_new.clear();
+            pcmf32_new.resize(n_samples_30s, 0.0f);
+            const auto expected_frames = n_samples_30s; // 3 secondes
 
-                if ((int) pcmf32_new.size() > 2*n_samples_step) {
-                    fprintf(stderr, "\n\n%s: WARNING: cannot process audio fast enough, dropping audio ...\n\n", __func__);
-                    audio.clear();
-                    continue;
-                }
-
-                if ((int) pcmf32_new.size() >= n_samples_step) {
-                    audio.clear();
-                    break;
-                }
-
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            for(int num_frames = 0; num_frames < expected_frames; num_frames++) {
+                float v;
+                app.ringbuffer.wait_dequeue(v);
+                pcmf32_new[num_frames] = v;
             }
-
             const int n_samples_new = pcmf32_new.size();
 
             // take up to params.length_ms audio from previous iteration
@@ -365,25 +345,25 @@ int main(int argc, char ** argv) {
 
             pcmf32_old = pcmf32;
         } else {
-            const auto t_now  = std::chrono::high_resolution_clock::now();
-            const auto t_diff = std::chrono::duration_cast<std::chrono::milliseconds>(t_now - t_last).count();
+            // const auto t_now  = std::chrono::high_resolution_clock::now();
+            // const auto t_diff = std::chrono::duration_cast<std::chrono::milliseconds>(t_now - t_last).count();
 
-            if (t_diff < 2000) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                continue;
-            }
+            // if (t_diff < 2000) {
+            //     std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            //     continue;
+            // }
 
-            audio.get(2000, pcmf32_new);
+            // audio.get(2000, pcmf32_new);
 
-            if (::vad_simple(pcmf32_new, WHISPER_SAMPLE_RATE, 1000, params.vad_thold, params.freq_thold, false)) {
-                audio.get(params.length_ms, pcmf32);
-            } else {
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            // if (::vad_simple(pcmf32_new, WHISPER_SAMPLE_RATE, 1000, params.vad_thold, params.freq_thold, false)) {
+            //     audio.get(params.length_ms, pcmf32);
+            // } else {
+            //     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-                continue;
-            }
+            //     continue;
+            // }
 
-            t_last = t_now;
+            // t_last = t_now;
         }
 
         // run the inference
@@ -505,6 +485,6 @@ int main(int argc, char ** argv) {
 
     whisper_print_timings(ctx);
     whisper_free(ctx);
-#endif
+
     return 0;
 }
