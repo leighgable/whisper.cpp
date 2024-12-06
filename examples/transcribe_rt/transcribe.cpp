@@ -18,6 +18,7 @@
 #include <iostream>
 #include <format>
 #include <optional>
+#include <readerwriterqueue.h>
 
 // command-line parameters
 struct whisper_params {
@@ -117,9 +118,11 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "\n");
 }
 
+#include <readerwritercircularbuffer.h>
 struct my_app_state {
     ma_device device;
     std::optional<ma_encoder> aEncoder;
+    moodycamel::BlockingReaderWriterCircularBuffer<float> ringbuffer = moodycamel::BlockingReaderWriterCircularBuffer<float>(8192);
 };
 
 
@@ -128,11 +131,13 @@ void data_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uin
     auto& app = *(my_app_state*)pDevice->pUserData;
 
     if(app.aEncoder)
-      ma_encoder_write_pcm_frames(&*app.aEncoder, pInput, frameCount, NULL);
+        ma_encoder_write_pcm_frames(&*app.aEncoder, pInput, frameCount, NULL);
 
     (void)pOutput; // Don't take output
 
-    fprintf(stderr, "frameCount: %d\n", (int)frameCount);
+    auto frames = static_cast<const float*>(pInput);
+    for(int i = 0; i < frameCount; i++)
+        app.ringbuffer.try_enqueue(frames[i]);
 }
 
 int audio_init_ma(my_app_state& app, whisper_params& params) {
@@ -185,11 +190,20 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    auto app = new my_app_state ;
-    audio_init_ma(*app, params);
+    my_app_state app;
+    audio_init_ma(app, params);
 
-    for(int i = 0; i < 5; i++)
-        sleep(1);
+    for(;;)
+    {
+        std::vector<float> buffer_pour_whisper;
+        const auto expected_frames = WHISPER_SAMPLE_RATE * 2.; // 2 secondes
+        while(buffer_pour_whisper.size() < expected_frames) {
+          float v;
+          app.ringbuffer.wait_dequeue(v);
+          buffer_pour_whisper.push_back(v);
+        }
+
+    }
     return 0;
 
 #if 0
