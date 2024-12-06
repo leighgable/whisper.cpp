@@ -19,6 +19,7 @@
 #include <format>
 #include <optional>
 #include <readerwriterqueue.h>
+#include <readerwritercircularbuffer.h>
 
 // command-line parameters
 struct whisper_params {
@@ -39,7 +40,7 @@ struct whisper_params {
     bool no_context    = true;
     bool no_timestamps = false;
     bool tinydiarize   = false;
-    bool save_audio    = false; // save audio to wav file
+    bool save_audio    = true; // save audio to wav file
     bool use_gpu       = true;
     bool flash_attn    = false;
 
@@ -118,7 +119,6 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "\n");
 }
 
-#include <readerwritercircularbuffer.h>
 struct my_app_state {
     ma_device device;
     std::optional<ma_encoder> aEncoder;
@@ -170,14 +170,14 @@ int audio_init_ma(my_app_state& app, whisper_params& params) {
 
     result = ma_device_init(NULL, &deviceConfig, &app.device);
     if (result != MA_SUCCESS) {
-        fprintf(stderr, "Failed to open audio capture device: %s\n", app.device.capture.name);
+        std::cerr << std::format("Failed to open audio capture device: {}\n", app.device.capture.name);
         return -2;
     }
 
     result = ma_device_start(&app.device);
     if (result != MA_SUCCESS) {
         ma_device_uninit(&app.device);
-        fprintf(stderr, "Failed to start audio capture device: %s\n", app.device.capture.name);
+        std::cerr << std::format("Failed to start audio capture device: {}\n", app.device.capture.name);
         return -3;
     }
     return 0;
@@ -189,8 +189,6 @@ int main(int argc, char ** argv) {
     if (whisper_params_parse(argc, argv, params) == false) {
         return 1;
     }
-
-    params.model = "/home/jcelerier/projets/formations/leigh-gable-2024-11/whisper.cpp/models/ggml-tiny.en.bin";
 
     my_app_state app;
     audio_init_ma(app, params);

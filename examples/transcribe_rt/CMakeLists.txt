@@ -1,4 +1,4 @@
-# stream
+# transcribe_rt
 set(TARGET transcribe_rt)
 add_executable(${TARGET} transcribe.cpp)
 
