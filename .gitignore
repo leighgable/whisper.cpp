@@ -1,6 +1,7 @@
 *.o
 *.a
 *.d
+audio_*.wav
 .cache/
 .coreml/
 .test/
@@ -34,7 +35,8 @@ ggml-metal-embed.metal.tmp
 /lsp
 test.wav
 
-arm_neon.h
+arm_neon.h:w
+
 sync.sh
 libwhisper.a
 libwhisper.so

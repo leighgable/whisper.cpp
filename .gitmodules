@@ -1,3 +1,6 @@
 [submodule "examples/transcribe_rt/readerwriterqueue"]
 	path = examples/transcribe_rt/readerwriterqueue
 	url = https://github.com/cameron314/readerwriterqueue
+[submodule "examples/transcribe/readerwriterqueue"]
+	path = examples/transcribe/readerwriterqueue
+	url = https://github.com/cameron314/readerwriterqueue.git

@@ -22,6 +22,7 @@
               cmake
               pkg-config
               ninja
+              llvmPackages_12.openmp
             ];
             
             buildInputs = with pkgs; [
